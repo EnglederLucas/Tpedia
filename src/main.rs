@@ -52,7 +52,7 @@ enum Event<I> {
 
 
 //Menu
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, )]
 enum MenuItem{
     Home,Results
 }
@@ -65,6 +65,15 @@ impl From<MenuItem> for usize {
         }
     }
 }
+
+impl PartialEq for MenuItem {
+    fn eq(&self, other: &MenuItem) -> bool {
+        usize::from(*self) == usize::from(*other)
+    }
+}
+
+impl Eq for MenuItem {}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode().expect("can run in raw mode");
 
@@ -109,6 +118,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let mut current_search_response: SearchResponse;
     let mut current_search_results: Vec<Search> = Vec::new();
+    let is_selected = false;
+    let mut selected_item = get_selected_search(current_search_results.clone(), &mut search_result_list_state);
 
     loop {
         terminal.draw(|rect| {
@@ -178,10 +189,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .split(chunks[1]);
 
-                    let (left, right) = render_search_results(current_search_results.clone(), &search_result_list_state);
+                    // let (left, right) = render_search_results(current_search_results.clone(), &search_result_list_state);
 
-                    rect.render_stateful_widget(left, results_chunks[0], &mut search_result_list_state);
-                    rect.render_widget(right, results_chunks[1]);
+                    let list = render_search_list(current_search_results.clone());
+                    rect.render_stateful_widget(list, results_chunks[0], &mut search_result_list_state);
+
+                    if is_selected {
+                        rect.render_widget(render_page_content(selected_item.clone()), results_chunks[1]);
+                    }
                 }
             }
             rect.render_widget(copyright, chunks[2]);
@@ -210,17 +225,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Esc => search_mode = false, 
                         _ => {}
                     }
-                } else {
+                } else if  active_menu_item == MenuItem::Results {
                     match event.code {
-                        KeyCode::Char('q') => {
-                            disable_raw_mode()?;
-                            terminal.show_cursor()?;
-                            break;
-                        }
-                        KeyCode::Char('h') => active_menu_item = MenuItem::Home,
-                        KeyCode::Char('r') => active_menu_item = MenuItem::Results,
-                        KeyCode::Char('s') => {
-                            search_mode = true;
+                        KeyCode::Enter => {
+                            selected_item =  get_selected_search(current_search_results.clone(), &mut search_result_list_state);
                         },
                         KeyCode::Down => {
                             if let Some(selected) = search_result_list_state.selected() {
@@ -242,6 +250,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                        _ => {}
+                    }
+                } else {
+                    match event.code {
+                        KeyCode::Char('q') => {
+                            disable_raw_mode()?;
+                            terminal.show_cursor()?;
+                            break;
+                        }
+                        KeyCode::Char('h') => active_menu_item = MenuItem::Home,
+                        KeyCode::Char('r') => active_menu_item = MenuItem::Results,
+                        KeyCode::Char('s') => {
+                            search_mode = true;
+                        },
                         _ => {}
                     }
                 }
@@ -309,6 +331,8 @@ fn render_home<'a>() -> Paragraph<'a> {
     );
     home
 }
+
+
 fn render_search_results<'a>(search_results: Vec<Search>, search_result_list_state: &ListState) -> (List<'a>, Table<'a>) {
     let results = Block::default() 
         .borders(Borders::ALL)
@@ -383,4 +407,59 @@ fn render_search_results<'a>(search_results: Vec<Search>, search_result_list_sta
     ]);
 
     (list, results_detail)
+}
+
+fn get_selected_search(search_results: Vec<Search>, search_result_list_state: &ListState) -> Search {
+    let selected_result = search_results
+        .get(
+            search_result_list_state
+                .selected()
+                .expect("there is always a selected pet"),
+        )
+        .expect("exists")
+        .clone();
+
+    selected_result
+}
+
+
+fn render_search_list<'a>(search_results: Vec<Search>) -> (List<'a>) {
+    let results = Block::default() 
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::White))
+        .title("Results")
+        .border_type(BorderType::Plain);
+
+    let items:Vec<_> = search_results
+        .iter()
+        .map(|s| {
+            ListItem::new(Spans::from(vec![Span::styled(
+                s.title.clone(),
+                Style::default(),
+            )]))
+        })
+        .collect();
+
+
+    let list = List::new(items).block(results).highlight_style(
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD),
+    );
+
+
+    list
+}
+
+fn render_page_content<'a>(selected_search: Search) -> (Block<'a>) {
+    let results = Block::default() 
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::White))
+        .title(Span::styled(selected_search.title, Style::default().fg(Color::Green)))
+        .border_type(BorderType::Plain);
+
+
+
+    results
 }
