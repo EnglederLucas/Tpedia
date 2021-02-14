@@ -1,40 +1,18 @@
-use chrono::prelude::*;
 use crossterm::{
     event::{self, Event as CEvent, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use html2text::from_read;
-use rand::{distributions::Alphanumeric, prelude::*};
-use serde::{Deserialize, Serialize};
+use regex::Regex;
 use wikimedia_types::{HtmlPageResult, Search, SearchResponse};
-use std::{collections::HashMap, convert::TryInto, fmt::Debug, fs};
-use std::io;
+use std::{convert::TryInto, fmt::Debug};
 use std::sync::mpsc;
 use std::thread;
+use std::io;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tui::{
-    backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Span, Spans},
-    widgets::{
-        Block, BorderType, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs,
-    },
-    Terminal,
-};
+use tui::{Terminal, backend::CrosstermBackend, layout::{Alignment, Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Span, Spans}, widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap}};
 mod wikimedia_types;
 
-const DB_PATH: &str = "./data/db.json";
-
-#[derive(Serialize, Deserialize, Clone)]
-struct Pet {
-    id: usize,
-    name: String,
-    category: String,
-    age: usize,
-    created_at: DateTime<Utc>,
-}
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -118,11 +96,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let mut current_search_response: SearchResponse;
     let mut current_search_results: Vec<Search> = Vec::new();
-    let is_selected = false;
-    let mut selected_item = get_selected_search(current_search_results.clone(), &mut search_result_list_state);
+    let mut is_selected = false;
+
+    let mut scroll: u16 = 0;
+    let mut current_content: Option<String> = None;
 
     loop {
         terminal.draw(|rect| {
+
             let size = rect.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -137,14 +118,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .split(size);
 
-            let copyright = Paragraph::new("pet-CLI 2020 - all rights reserved")
+            let copyright = Paragraph::new("by Lucas Engleder")
                 .style(Style::default().fg(Color::LightCyan))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .style(Style::default().fg(Color::White))
-                        .title("Copyright")
                         .border_type(BorderType::Plain),
                 );
 
@@ -164,21 +144,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect();
 
-            let tabs = Tabs::new(menu)
-                .select(active_menu_item.into())
-                .block(Block::default().title("Menu").borders(Borders::ALL))
-                .style(Style::default().fg(Color::White))
-                .highlight_style(Style::default().fg(Color::Yellow))
-                .divider(Span::raw("|"));
+            { 
+                let tabs = Tabs::new(menu)
+                    .select(active_menu_item.into())
+                    .block(Block::default().title("Menu").borders(Borders::ALL))
+                    .style(Style::default().fg(Color::White))
+                    .highlight_style(Style::default().fg(Color::Yellow))
+                    .divider(Span::raw("|"));
 
-            let search_block = Block::default().title(
-                Span::styled(&search_string, Style::default().fg(Color::Green))     
-            );
+                let search_box = Block::default() 
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(Color::Yellow))
+                    .border_type(BorderType::Plain);
 
-            rect.render_widget(tabs, chunks[0]);
+                let search_text = Paragraph::new(search_string.clone())
+                    .block(search_box)
+                    .style(Style::default()
+                    .fg(Color::Yellow));
 
-            rect.render_widget(search_block, chunks[0]);
+                let navbar = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints(
+                        [Constraint::Percentage(70), Constraint::Percentage(30)].as_ref(),
+                    )
+                    .split(chunks[0]);
 
+
+                rect.render_widget(tabs, navbar[0]);
+
+                rect.render_widget(search_text, navbar[1]);   
+            }
+
+            //Content Page, depends on which tab
             match active_menu_item {
                 MenuItem::Home => rect.render_widget(render_home(), chunks[1]),
                 MenuItem::Results => {
@@ -189,16 +186,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .split(chunks[1]);
 
-                    // let (left, right) = render_search_results(current_search_results.clone(), &search_result_list_state);
 
                     let list = render_search_list(current_search_results.clone());
                     rect.render_stateful_widget(list, results_chunks[0], &mut search_result_list_state);
 
                     if is_selected {
-                        rect.render_widget(render_page_content(selected_item.clone()), results_chunks[1]);
+                        let selected_item = get_selected_search(current_search_results.clone(), &mut search_result_list_state);
+
+                        let res  = render_page_content(selected_item.clone(), current_content.clone(), scroll,(size.width as f64 * 0.8).floor() as u16);
+                        let page = res.0;
+                        current_content = Some(res.1);
+                        rect.render_widget(page, results_chunks[1]);
                     }
                 }
             }
+
+            //Footer
             rect.render_widget(copyright, chunks[2]);
         })?;
 
@@ -216,7 +219,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let rt = tokio::runtime::Runtime::new().unwrap();
                         
                             let res = rt.block_on(search(search_string.clone())).unwrap();
-                            // println!("{:?}", res);
 
                             current_search_results = res.query.search;
                             search_mode = false;
@@ -225,17 +227,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Esc => search_mode = false, 
                         _ => {}
                     }
-                } else if  active_menu_item == MenuItem::Results {
+                } 
+                else if is_selected {
+                    match event.code {
+                        KeyCode::Esc => {
+                            is_selected = false;
+                        }
+                        KeyCode::Down => {
+                            scroll += 1;
+                        }
+                        KeyCode::Up => {
+                            if scroll > 0 {
+                                scroll -= 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                } 
+                else if  active_menu_item == MenuItem::Results {
                     match event.code {
                         KeyCode::Enter => {
-                            selected_item =  get_selected_search(current_search_results.clone(), &mut search_result_list_state);
+                            is_selected = true;
+                            current_content = None;
+                            scroll = 0;
                         },
                         KeyCode::Down => {
                             if let Some(selected) = search_result_list_state.selected() {
                                 let amount_results = current_search_results.len();
-                                if selected >= amount_results - 1 {
+                                if selected >= amount_results - 1 && amount_results != 0 {
                                     search_result_list_state.select(Some(0));
-                                } else {
+                                } else if amount_results != 0 {
                                     search_result_list_state.select(Some(selected + 1));
                                 }
                             }
@@ -243,16 +264,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Up => {
                             if let Some(selected) = search_result_list_state.selected() {
                                 let amount_results = current_search_results.len();
-                                if selected > 0 {
+                            
+                                if selected > 0 &&  amount_results != 0 {
                                     search_result_list_state.select(Some(selected - 1));
-                                } else {
+                                } else if  amount_results != 0  {
                                     search_result_list_state.select(Some(amount_results - 1));
                                 }
                             }
                         }
                         _ => {}
                     }
-                } else {
+                }
+
+                if !search_mode {
                     match event.code {
                         KeyCode::Char('q') => {
                             disable_raw_mode()?;
@@ -266,7 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         _ => {}
                     }
-                }
+                } 
             },
             Event::Tick => {}
         }
@@ -275,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn fetch_html(pageid: usize) -> Result<String, Box<dyn std::error::Error>> {
+async fn fetch_html(pageid: usize, text_width: u16) -> Result<String, Box<dyn std::error::Error>> {
 
     let url = format!("https://en.wikipedia.org/w/api.php?action=parse&format=json&pageid={0}&prop=text&formatversion=2", pageid);
 
@@ -286,9 +310,29 @@ async fn fetch_html(pageid: usize) -> Result<String, Box<dyn std::error::Error>>
 
     let page_res: HtmlPageResult = serde_json::from_value(resp).unwrap();
 
-    let text = html2text::from_read( page_res.parse.text.as_bytes(), 100);
+    let text = html2text::from_read( page_res.parse.text.as_bytes(), text_width.into());
 
-    Ok(text)
+    let re = Regex::new(r"(\[)+\d*(\])|(edit)+|\[|\]|/wiki/.*|https://.*|index\.php.*|(/.*/)+").unwrap();
+    //only Numbers (\[)+\d*(\])+
+    let cleaned = re.replace_all(&text, "");
+    let mut removed_contents: String = String::from(cleaned);
+
+
+    let contents_start = removed_contents.find("## Contents");
+    match contents_start {
+        None => {}
+        Some(i) => {
+            let a:String = removed_contents[(i+11)..].to_string();
+            // println!("{}", a);
+            let end_index = removed_contents[(i+11)..].find("## ").unwrap();
+            println!("{}", end_index);
+
+            removed_contents = format!("{}{}", removed_contents[..i].to_string(), removed_contents[(end_index+11+i)..].to_string());
+        }
+    }
+
+
+    Ok(removed_contents)
 }
 
 async fn search (search_term: String) -> Result<SearchResponse, Box<dyn std::error::Error>>  {
@@ -332,105 +376,30 @@ fn render_home<'a>() -> Paragraph<'a> {
     home
 }
 
-
-fn render_search_results<'a>(search_results: Vec<Search>, search_result_list_state: &ListState) -> (List<'a>, Table<'a>) {
-    let results = Block::default() 
-        .borders(Borders::ALL)
-        .style(Style::default().fg(Color::White))
-        .title("Results")
-        .border_type(BorderType::Plain);
-
-    let items:Vec<_> = search_results
-        .iter()
-        .map(|s| {
-            ListItem::new(Spans::from(vec![Span::styled(
-                s.title.clone(),
-                Style::default(),
-            )]))
-        })
-        .collect();
-
-
-
-    let selected_result = search_results
-        .get(
-            search_result_list_state
-                .selected()
-                .expect("there is always a selected pet"),
-        )
-        .expect("exists")
-        .clone();
-
-    let list = List::new(items).block(results).highlight_style(
-        Style::default()
-            .bg(Color::Yellow)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD),
-    );
-
-
-    
-    let formatted_snippet = html2text::from_read( selected_result.snippet.as_bytes(), 20);  
-
-    let results_detail = Table::new(vec![Row::new(vec![
-        Cell::from(Span::raw(selected_result.title)),
-        Cell::from(Span::raw(formatted_snippet)),
-        Cell::from(Span::raw(selected_result.wordcount.to_string())),
-    ])])
-    .header(Row::new(vec![
-        Cell::from(Span::styled(
-            "Title",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Description",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Wordcount",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-    ])
-    )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .style(Style::default().fg(Color::White))
-            .title("Detail")
-            .border_type(BorderType::Plain),
-    )
-    .column_spacing(3)
-    .widths(&[
-        Constraint::Percentage(15),
-        Constraint::Percentage(75),
-        Constraint::Percentage(5),
-    ]);
-
-    (list, results_detail)
-}
-
 fn get_selected_search(search_results: Vec<Search>, search_result_list_state: &ListState) -> Search {
     let selected_result = search_results
         .get(
             search_result_list_state
                 .selected()
-                .expect("there is always a selected pet"),
+                .expect("there is always a selected result"),
         )
-        .expect("exists")
+        .expect("no search results")
         .clone();
 
     selected_result
 }
 
 
-fn render_search_list<'a>(search_results: Vec<Search>) -> (List<'a>) {
+fn render_search_list<'a>(search_results: Vec<Search>) -> List<'a> {
     let results = Block::default() 
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::White))
         .title("Results")
         .border_type(BorderType::Plain);
 
-    let items:Vec<_> = search_results
+
+    let items: Vec<_> = if search_results.len() > 0 {
+        search_results
         .iter()
         .map(|s| {
             ListItem::new(Spans::from(vec![Span::styled(
@@ -438,8 +407,11 @@ fn render_search_list<'a>(search_results: Vec<Search>) -> (List<'a>) {
                 Style::default(),
             )]))
         })
-        .collect();
-
+        .collect()
+    } else {
+        vec![ListItem::new(Span::styled("No Results found", Style::default().fg(Color::LightRed)))]
+    };
+    
 
     let list = List::new(items).block(results).highlight_style(
         Style::default()
@@ -448,18 +420,30 @@ fn render_search_list<'a>(search_results: Vec<Search>) -> (List<'a>) {
             .add_modifier(Modifier::BOLD),
     );
 
-
     list
 }
 
-fn render_page_content<'a>(selected_search: Search) -> (Block<'a>) {
-    let results = Block::default() 
+fn render_page_content<'a>(selected_search: Search, content: Option<String>, scroll: u16, width: u16) -> (Paragraph<'a>,String) {
+    let text_block = Block::default() 
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::White))
         .title(Span::styled(selected_search.title, Style::default().fg(Color::Green)))
         .border_type(BorderType::Plain);
 
 
+    let text: String = match content {
+        None => {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(fetch_html(selected_search.pageid.try_into().unwrap(), width - 10)).unwrap()
+        }
+        Some(c) => c
+    };
 
-    results
+    let text_paragraph = Paragraph::new(text.clone())
+        .block(text_block)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+
+
+    (text_paragraph, text)
 }

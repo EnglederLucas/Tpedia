@@ -7,7 +7,7 @@ pub struct SearchResponse {
     pub batchcomplete: String,
 
     #[serde(rename = "continue")]
-    pub search_response_continue: Continue,
+    pub search_response_continue: Option<Continue>,
 
     #[serde(rename = "query")]
     pub query: Query,
@@ -52,10 +52,10 @@ pub struct Searchinfo {
     pub totalhits: i64,
 
     #[serde(rename = "suggestion")]
-    pub suggestion: String,
+    pub suggestion: Option<String>,
 
     #[serde(rename = "suggestionsnippet")]
-    pub suggestionsnippet: String,
+    pub suggestionsnippet: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, std::fmt::Debug)]
