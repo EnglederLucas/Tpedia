@@ -157,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .style(Style::default().fg(Color::Yellow))
                     .border_type(BorderType::Plain);
 
-                let search_text = Paragraph::new(search_string.clone())
+                let search_text = Paragraph::new(format!("{}{}"," 🔍 ", search_string.clone()))
                     .block(search_box)
                     .style(Style::default()
                     .fg(Color::Yellow));
@@ -322,10 +322,7 @@ async fn fetch_html(pageid: usize, text_width: u16) -> Result<String, Box<dyn st
     match contents_start {
         None => {}
         Some(i) => {
-            let a:String = removed_contents[(i+11)..].to_string();
-            // println!("{}", a);
             let end_index = removed_contents[(i+11)..].find("## ").unwrap();
-            println!("{}", end_index);
 
             removed_contents = format!("{}{}", removed_contents[..i].to_string(), removed_contents[(end_index+11+i)..].to_string());
         }
