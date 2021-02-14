@@ -222,7 +222,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             current_search_results = res.query.search;
                             search_mode = false;
-                            active_menu_item = MenuItem::Results
+                            active_menu_item = MenuItem::Results;
+
+                            is_selected = false;
+                            search_result_list_state.select(Some(0));
                         }
                         KeyCode::Esc => search_mode = false, 
                         _ => {}
@@ -310,13 +313,18 @@ async fn fetch_html(pageid: usize, text_width: u16) -> Result<String, Box<dyn st
 
     let page_res: HtmlPageResult = serde_json::from_value(resp).unwrap();
 
-    let text = html2text::from_read( page_res.parse.text.as_bytes(), text_width.into());
+    let html_regex = Regex::new(r#"<a href=\\#".*\\#">"#).unwrap();
+    let html_cleaned = html_regex.replace_all(&page_res.parse.text, "");
 
-    let re = Regex::new(r"(\[)+\d*(\])|(edit)+|\[|\]|/wiki/.*|https://.*|index\.php.*|(/.*/)+").unwrap();
+    let text = html2text::from_read( String::from(html_cleaned).as_bytes(), text_width.into());
+
+    let re = Regex::new(r"(\[)+\d*(\])|(edit)+|\[|\]|(https:)?(/.*/.*)+[\s\S]|#+\s\W").unwrap();
     //only Numbers (\[)+\d*(\])+
     let cleaned = re.replace_all(&text, "");
-    let mut removed_contents: String = String::from(cleaned);
+    let a = Regex::new(r"\d\s").unwrap();
+    let removed_single_digit = a.replace_all(&cleaned, "");
 
+    let mut removed_contents: String = String::from(removed_single_digit);
 
     let contents_start = removed_contents.find("## Contents");
     match contents_start {
